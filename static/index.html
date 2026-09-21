@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>视界标定室</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <header>
+    <h1>视界标定室</h1>
+    <div class="meta" id="meta"></div>
+  </header>
+
+  <section class="controls">
+    <label>视图
+      <select id="view">
+        <option value="raw">原始数据</option>
+        <option value="manual">手工旗标</option>
+        <option value="auto">自动建议</option>
+        <option value="run">求解结果</option>
+      </select>
+    </label>
+    <label>基线
+      <select id="baseline"></select>
+    </label>
+    <label>参考天线
+      <select id="refAntenna"></select>
+    </label>
+    <label>时间窗
+      <input id="tStart" type="number" min="0" value="0" style="width:3.5em" />
+      –
+      <input id="tEnd" type="number" min="0" value="5" style="width:3.5em" />
+    </label>
+    <label>频率分组
+      <input id="groupSize" type="number" min="1" value="2" style="width:3.5em" />
+    </label>
+    <span class="spacer"></span>
+    <button id="btnSuggest">生成自动建议</button>
+    <button id="btnSolve" class="primary">求解增益</button>
+    <button id="btnReimport">清空并重新导入</button>
+  </section>
+
+  <section class="flag-form">
+    <h3>手工旗标区间</h3>
+    <div class="flag-row">
+      <label>天线A
+        <select id="flagA"><option value="">(任意)</option></select>
+      </label>
+      <label>天线B
+        <select id="flagB"><option value="">(任意)</option></select>
+      </label>
+      <label>t起 <input id="flagT0" type="number" placeholder="*" style="width:3.5em" /></label>
+      <label>t止 <input id="flagT1" type="number" placeholder="*" style="width:3.5em" /></label>
+      <label>ch起 <input id="flagC0" type="number" placeholder="*" style="width:3.5em" /></label>
+      <label>ch止 <input id="flagC1" type="number" placeholder="*" style="width:3.5em" /></label>
+      <label class="reason">理由 <input id="flagReason" placeholder="例如：局部干扰" /></label>
+      <button id="btnAddFlag">叠加旗标</button>
+    </div>
+  </section>
+
+  <section class="charts">
+    <div class="card"><h3>幅度 |V|</h3><div id="chartAmp"></div></div>
+    <div class="card"><h3>相位 arg(V)</h3><div id="chartPhase"></div></div>
+    <div class="card"><h3>闭合相位</h3><div id="chartClosure"></div></div>
+    <div class="card"><h3>残差（选定运行）</h3><div id="chartResid"></div></div>
+  </section>
+
+  <section class="panels">
+    <div class="card flags-panel">
+      <h3>旗标（来源与理由）</h3>
+      <table id="flagTable">
+        <thead>
+          <tr><th>ID</th><th>来源</th><th>状态</th><th>区间</th><th>理由</th><th></th></tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="card gains-panel">
+      <h3>天线增益</h3>
+      <div id="diagnostics"></div>
+      <table id="gainTable">
+        <thead><tr><th>频组</th><th>天线</th><th>幅度</th><th>相位(°)</th><th>复数</th><th>状态</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="card runs-panel">
+      <h3>运行记录</h3>
+      <table id="runTable">
+        <thead><tr><th>ID</th><th>参考</th><th>窗/组</th><th>状态</th><th>操作</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div id="replayBox"></div>
+    </div>
+  </section>
+
+  <div id="tooltip" class="tooltip"></div>
+  <script src="/static/app.js"></script>
+</body>
+</html>
