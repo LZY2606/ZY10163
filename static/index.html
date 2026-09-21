@@ -1,0 +1,237 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>视界标定室</title>
+<style>
+  body { font-family: -apple-system, "PingFang SC", sans-serif; margin: 16px; background:#101418; color:#dde3ea; }
+  h1 { font-size: 22px; } h2 { font-size: 15px; margin: 14px 0 6px; color:#8ab4f8; }
+  fieldset { border:1px solid #2a3340; border-radius:8px; margin-bottom:12px; }
+  legend { color:#8ab4f8; padding:0 6px; }
+  label { font-size:12px; margin-right:4px; }
+  input, select, button { background:#1b222c; color:#dde3ea; border:1px solid #3a4656;
+    border-radius:5px; padding:4px 8px; font-size:12px; margin:2px; }
+  button { cursor:pointer; } button:hover { background:#26303d; }
+  canvas { background:#0b0e12; border:1px solid #2a3340; border-radius:6px; margin:4px 8px 4px 0; }
+  table { border-collapse:collapse; font-size:12px; margin:4px 0; }
+  td, th { border:1px solid #2a3340; padding:3px 8px; }
+  .row { display:flex; flex-wrap:wrap; gap:16px; }
+  .col { min-width:340px; flex:1; }
+  .tag { font-size:11px; padding:1px 6px; border-radius:8px; margin-right:4px; }
+  .ingest { background:#5a3; color:#041; } .manual { background:#fa3; color:#420; }
+  .auto { background:#4af; color:#013; }
+  #log { font-size:12px; white-space:pre-wrap; background:#0b0e12; padding:8px;
+    border-radius:6px; max-height:180px; overflow:auto; }
+</style>
+</head>
+<body>
+<h1>视界标定室</h1>
+
+<fieldset><legend>数据与求解</legend>
+  <button onclick="importFixture()">导入固定夹具</button>
+  <button onclick="importFixture(7)">乱序导入 (复核)</button>
+  <span id="dsinfo"></span><br>
+  <label>参考天线</label><select id="ref"></select>
+  <label>时间窗</label><input id="t0" type="number" value="0" step="1" style="width:52px"> ~
+  <input id="t1" type="number" value="3" step="1" style="width:52px">
+  <label>时间 bin</label><input id="timebin" type="number" value="1" step="0.5" style="width:52px">
+  <label>频率分组</label><input id="changroup" type="number" value="8" min="1" style="width:52px">
+  <button onclick="solve()">求解</button>
+  <button onclick="suggest(false)">自动建议</button>
+  <button onclick="suggest(true)">建议并应用</button>
+</fieldset>
+
+<fieldset><legend>手工旗标 (区间)</legend>
+  <label>范围</label><select id="fscope"><option value="antenna">天线</option><option value="baseline">基线</option></select>
+  <label>天线1</label><select id="fant1"></select>
+  <label>天线2</label><select id="fant2"><option value="">(无)</option></select>
+  <label>时间</label><input id="ft0" type="number" value="2" style="width:52px"> ~
+  <input id="ft1" type="number" value="3" style="width:52px">
+  <label>频道</label><input id="fc0" type="number" value="0" style="width:52px"> ~
+  <input id="fc1" type="number" value="7" style="width:52px">
+  <label>理由</label><input id="freason" value="A2 相位突跳" style="width:160px">
+  <button onclick="addFlag()">添加旗标</button>
+  <div id="flags"></div>
+</fieldset>
+
+<div class="row">
+  <div class="col"><h2>幅度 (时间)</h2><canvas id="cvAmp" width="440" height="240"></canvas></div>
+  <div class="col"><h2>相位 (频道, 解缠)</h2><canvas id="cvPh" width="440" height="240"></canvas></div>
+</div>
+<div class="row">
+  <div class="col"><h2>闭合相位 (时间)</h2><canvas id="cvCl" width="440" height="240"></canvas></div>
+  <div class="col"><h2>残差 (样本)</h2><canvas id="cvRes" width="440" height="240"></canvas></div>
+</div>
+
+<div class="row">
+  <div class="col"><h2>增益与诊断</h2><div id="gains"></div></div>
+  <div class="col"><h2>运行记录</h2><div id="runs"></div>
+    <button onclick="exportLast()">导出最近运行</button>
+    <button onclick="wipeReimport()">清库重放复核</button></div>
+</div>
+
+<h2>日志</h2><div id="log"></div>
+
+<script>
+let DS = null, DATA = null, LASTRUN = null;
+const COLORS = ['#6cf','#fc6','#6f6','#f6c','#cf6','#6ff','#fa5','#a8f'];
+const $ = id => document.getElementById(id);
+function log(m){ $('log').textContent = m + '\n' + $('log').textContent; }
+async function api(path, opts){
+  const r = await fetch(path, opts ? {method:'POST', headers:{'Content-Type':'application/json'},
+    body: JSON.stringify(opts)} : undefined);
+  if(!r.ok) throw new Error((await r.json()).detail || r.statusText);
+  return r.json();
+}
+
+async function importFixture(seed){
+  const q = seed===undefined ? '' : '?order_seed='+seed;
+  const r = await api('/api/datasets/import-fixture'+q, {});
+  DS = r.dataset_id;
+  log(`数据集 ${DS} hash=${r.hash.slice(0,12)}… ${r.created?'新建':'已存在(顺序无关去重)'}`);
+  await refresh();
+}
+async function refresh(){
+  DATA = await api(`/api/datasets/${DS}/visibilities`);
+  $('dsinfo').textContent = `数据集 #${DS}: ${DATA.samples.length} 样本, ${DATA.flags.length} 旗标`;
+  for(const id of ['ref','fant1','fant2']){
+    const sel = $(id), keep = sel.value;
+    sel.innerHTML = (id==='fant2'?'<option value="">(无)</option>':'') +
+      DATA.antennas.map(a=>`<option>${a}</option>`).join('');
+    if(keep) sel.value = keep;
+  }
+  $('flags').innerHTML = DATA.flags.map(f =>
+    `<span class="tag ${f.source}">${f.source}</span>#${f.id} ${f.scope} ${f.ant1}${f.ant2?'-'+f.ant2:''}`+
+    ` t[${f.t0},${f.t1}] c[${f.c0},${f.c1}] — ${f.reason}<br>`).join('');
+  drawAll();
+}
+async function addFlag(){
+  await api('/api/flags', {dataset_id: DS, reason: $('freason').value,
+    scope: $('fscope').value, ant1: $('fant1').value, ant2: $('fant2').value || null,
+    t0:+$('ft0').value, t1:+$('ft1').value, c0:+$('fc0').value, c1:+$('fc1').value});
+  log('已添加手工旗标'); await refresh();
+}
+async function suggest(apply){
+  const r = await api(`/api/flags/suggest?dataset_id=${DS}&apply=${apply}`, {});
+  log(`自动建议 ${r.suggestions.length} 条` + (apply?` 已应用 #${r.applied_flag_ids}`:' (未落库)'));
+  await refresh();
+}
+async function solve(){
+  const r = await api('/api/runs', {dataset_id: DS, ref_ant: $('ref').value,
+    t0:+$('t0').value, t1:+$('t1').value, time_bin:+$('timebin').value,
+    chan_group:+$('changroup').value, c0:0, c1:7});
+  LASTRUN = await api('/api/runs/'+r.run_id);
+  log(`运行 #${r.run_id} 状态=${r.status} hash=${r.result_hash.slice(0,12)}…`);
+  showRun(LASTRUN); await listRuns(); drawAll();
+}
+async function listRuns(){
+  const runs = await api('/api/runs?dataset_id='+DS);
+  $('runs').innerHTML = runs.map(r =>
+    `#${r.id} [${r.status}] flags={${JSON.parse(r.flag_ids).join(',')}} `+
+    `<button onclick="replay(${r.id})">重放</button>`).join('<br>');
+}
+async function replay(id){
+  const r = await api(`/api/runs/${id}/replay`, {});
+  log(`重放 #${id} -> #${r.run_id}: ${r.matches_original?'结果一致 ✓':'结果不一致 ✗'}`);
+  await listRuns();
+}
+async function exportLast(){
+  if(!LASTRUN) return log('尚无运行');
+  const rec = await api(`/api/runs/${LASTRUN.id}/export`);
+  const blob = new Blob([JSON.stringify(rec)], {type:'application/json'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob); a.download = `run-${LASTRUN.id}.json`; a.click();
+  log(`已导出运行 #${LASTRUN.id}`);
+}
+async function wipeReimport(){
+  if(!LASTRUN) return log('尚无运行');
+  const rec = await api(`/api/runs/${LASTRUN.id}/export`);
+  await fetch('/api/dev/wipe', {method:'POST'}).catch(()=>{});
+  const r = await api('/api/runs/import', rec);
+  log(`清库重放: 新运行 #${r.run_id} 校验 ${r.verified?'通过 ✓':'失败 ✗'}`);
+  DS = (await api('/api/datasets'))[0].id; await refresh(); await listRuns();
+}
+function showRun(run){
+  const g = run.result.groups;
+  let html = `<b>状态: ${run.status}</b><br>`;
+  for(const k of Object.keys(g)){
+    const gr = g[k];
+    html += `<br>组 tbin=${gr.tbin} c[${gr.c0},${gr.c1}] — ${gr.status}`;
+    if(gr.uncalibrated.length) html += ` <span style="color:#f88">未定标: ${gr.uncalibrated}</span>`;
+    if(gr.diagnostics.cond_phase) html += ` cond=${gr.diagnostics.cond_phase.toExponential(1)}`;
+    html += '<table><tr><th>天线</th><th>|g|</th><th>相位°</th></tr>';
+    for(const a of Object.keys(gr.gains).sort()){
+      const [re,im] = gr.gains[a];
+      html += `<tr><td>${a}</td><td>${Math.hypot(re,im).toFixed(4)}</td>`+
+              `<td>${(Math.atan2(im,re)*180/Math.PI).toFixed(2)}</td></tr>`;
+    }
+    html += '</table>';
+  }
+  $('gains').innerHTML = html;
+}
+
+// ---------- 绘图 ----------
+function axes(ctx, w, h, ylab){
+  ctx.clearRect(0,0,w,h); ctx.strokeStyle='#3a4656'; ctx.fillStyle='#8ab4f8';
+  ctx.font='10px sans-serif';
+  ctx.beginPath(); ctx.moveTo(34,4); ctx.lineTo(34,h-18); ctx.lineTo(w-4,h-18); ctx.stroke();
+  ctx.fillText(ylab, 4, 12);
+}
+function plot(ctx, pts, w, h, xlim, ylim){
+  // pts: [{x,y,color,flagged}]
+  const X = v => 34 + (v-xlim[0])/(xlim[1]-xlim[0]||1)*(w-42);
+  const Y = v => (h-18) - (v-ylim[0])/(ylim[1]-ylim[0]||1)*(h-26);
+  for(const p of pts){
+    ctx.fillStyle = p.flagged ? '#f44' : p.color;
+    if(p.flagged){ ctx.strokeStyle='#f44'; ctx.strokeRect(X(p.x)-3,Y(p.y)-3,6,6); }
+    else { ctx.beginPath(); ctx.arc(X(p.x),Y(p.y),2.4,0,7); ctx.fill(); }
+  }
+}
+function drawAll(){
+  if(!DATA) return;
+  const baselines = [...new Set(DATA.samples.map(s=>s.ant1+'-'+s.ant2))];
+  const bcolor = Object.fromEntries(baselines.map((b,i)=>[b,COLORS[i%COLORS.length]]));
+  // 幅度 vs 时间
+  let ctx = $('cvAmp').getContext('2d'); axes(ctx,440,240,'|V|');
+  plot(ctx, DATA.samples.map(s=>({x:s.time, y:Math.hypot(s.real,s.imag),
+    color:bcolor[s.ant1+'-'+s.ant2], flagged:s.flag_ids.length>0})),
+    440,240,[-0.3,3.3],[0,2]);
+  // 相位 vs 频道 (解缠, 每基线取 t=0)
+  ctx = $('cvPh').getContext('2d'); axes(ctx,440,240,'∠V rad');
+  const phPts = [];
+  for(const b of baselines){
+    const [a1,a2] = b.split('-');
+    const ss = DATA.samples.filter(s=>s.ant1+'-'+s.ant2===b && s.time===0)
+      .sort((x,y)=>x.channel-y.channel);
+    let prev=0, off=0;
+    for(const s of ss){
+      let p = Math.atan2(s.imag,s.real);
+      while(p+off-prev > Math.PI) off -= 2*Math.PI;
+      while(p+off-prev < -Math.PI) off += 2*Math.PI;
+      phPts.push({x:s.channel, y:p+off, color:bcolor[b], flagged:s.flag_ids.length>0});
+      prev = p+off;
+    }
+  }
+  plot(ctx, phPts, 440,240,[-0.5,7.5],[-4,4]);
+  // 闭相位 vs 时间 (最近运行或即时计算)
+  ctx = $('cvCl').getContext('2d'); axes(ctx,440,240,'cl rad');
+  if(LASTRUN){
+    const tris = [...new Set(LASTRUN.result.closures.map(c=>c.triangle.join('')))];
+    const tcol = Object.fromEntries(tris.map((t,i)=>[t,COLORS[i%COLORS.length]]));
+    plot(ctx, LASTRUN.result.closures.filter(c=>c.channel===0).map(c=>({
+      x:c.time, y:c.closure_phase, color:tcol[c.triangle.join('')], flagged:c.flagged})),
+      440,240,[-0.3,3.3],[-3.3,3.3]);
+  }
+  // 残差
+  ctx = $('cvRes').getContext('2d'); axes(ctx,440,240,'|r|');
+  if(LASTRUN){
+    plot(ctx, LASTRUN.result.residuals.map((r,i)=>({
+      x:i, y:r.residual?Math.hypot(...r.residual):0,
+      color:bcolor[r.ant1+'-'+r.ant2], flagged:r.flag_ids.length>0})),
+      440,240,[-5,LASTRUN.result.residuals.length+5],[0,1.2]);
+  }
+}
+importFixture();
+</script>
+</body>
+</html>
